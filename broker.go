@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"os"
 	"reflect"
@@ -14,8 +16,80 @@ import (
 	"github.com/gorilla/mux"
 )
 
-/* Service Stuff */
-/*****************/
+/* Misc Stuff */
+/**************/
+var verbose int = 3
+var hostString string = ""
+var brokerUser string = "user"
+var brokerPassword string = "passw0rd"
+var disableAuth bool = false
+
+func Debug(level int, format string, args ...interface{}) {
+	if verbose < level {
+		return
+	}
+	fmt.Printf(format, args...)
+}
+
+func WriteJSON(w http.ResponseWriter, obj interface{}) {
+	b, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		b = []byte(err.Error())
+	}
+	w.Write(b)
+	w.Write([]byte("\n"))
+}
+
+func GeneratePassword() string {
+	len := 6 + rand.Int()%6
+	var password [12]byte
+
+	for i := 0; i < len; i++ {
+		r := rand.Int() % 62
+		if r < 26 {
+			password[i] = byte('a' + r)
+		} else if r < 52 {
+			password[i] = byte('A' + (r - 26))
+		} else {
+			password[i] = byte('0' + (r - 52))
+		}
+	}
+	return string(password[:len])
+}
+
+func InfoHandler(w http.ResponseWriter, r *http.Request) {
+	str := fmt.Sprintf(
+		"OSB API Sample DB Broker\n"+
+			"------------------------\n"+
+			"User: %s\n"+
+			"Password: %s\n"+
+			"DBs: %d\n"+
+			"Services: %d\n"+
+			"Instances: %d\n",
+		brokerUser, brokerPassword, len(DBs), len(catalog.Services),
+		len(broker.Instances))
+	w.Write([]byte(str))
+}
+
+func VerifyBasicAuth(w http.ResponseWriter, r *http.Request,
+	user, password string) bool {
+
+	if disableAuth || user == "" {
+		return true
+	}
+
+	u, p, ok := r.BasicAuth()
+	if ok && user == u && password == p {
+		return true
+	}
+	w.WriteHeader(http.StatusUnauthorized)
+	return false
+}
+
+/* Service(DB) Stuff */
+/*********************/
+var lastID int = 0
+var DBs map[string]*DB = map[string]*DB{} // DBid -> DB
 
 type DB struct {
 	ID       string
@@ -42,18 +116,25 @@ func NewDB(r *http.Request) *DB {
 	}
 	newDBIDmutex.Unlock()
 
+	host := r.Host
+	if hostString != "" {
+		host = hostString
+	}
+
 	db := &DB{
 		ID:       strID,
 		User:     "user",
-		Password: "passw0rd",
+		Password: GeneratePassword(),
 		Data:     map[string][]byte{},
-		URL:      fmt.Sprintf("http://%s/db/"+strID, r.Host),
+		URL:      fmt.Sprintf("http://%s/db/"+strID, host),
 		mutex:    sync.Mutex{},
 	}
 
 	DBMapmutex.Lock()
 	DBs[db.ID] = db
 	DBMapmutex.Unlock()
+
+	Debug(2, "DB %s: created\n", db.ID)
 	return db
 }
 
@@ -61,9 +142,14 @@ func DeleteDB(db *DB) {
 	DBMapmutex.Lock()
 	delete(DBs, db.ID)
 	DBMapmutex.Unlock()
+	Debug(2, "DB %s: deleted\n", db.ID)
 }
 
 func DBAllHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	tmpDBs := []*DB{}
 	for _, db := range DBs {
 		tmpDBs = append(tmpDBs, db)
@@ -75,6 +161,9 @@ func DBHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if dbID := vars["dbID"]; dbID != "" {
 		if db := DBs[dbID]; db != nil {
+			if !VerifyBasicAuth(w, r, db.User, db.Password) {
+				return
+			}
 			WriteJSON(w, db)
 			return
 		}
@@ -86,11 +175,16 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dbID := vars["dbID"]
 
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	if dbID == "" {
 		db := NewDB(r)
 		DBs[db.ID] = db
 		w.Header().Add("Location", "/db/"+db.ID)
 		w.WriteHeader(http.StatusCreated)
+		WriteJSON(w, db)
 		return
 	}
 
@@ -99,21 +193,30 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	DBs[dbID] = NewDB(r)
+	db := NewDB(r)
+	DBs[dbID] = db
 
 	// Add host:port
 	w.Header().Add("Location", "/db/"+dbID)
 
 	w.WriteHeader(http.StatusCreated)
+	WriteJSON(w, db)
 }
 
 func DBDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	dbID := vars["dbID"]
-	if dbID != "" {
-		delete(DBs, dbID)
-		return
+	if dbID := vars["dbID"]; dbID != "" {
+		if db := DBs[dbID]; db != nil {
+			if !VerifyBasicAuth(w, r, db.User, db.Password) &&
+				!VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+
+				return
+			}
+			DeleteDB(db)
+			return
+		}
 	}
+
 	w.WriteHeader(http.StatusNotFound)
 }
 
@@ -121,47 +224,50 @@ func DBGetHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if dbID := vars["dbID"]; dbID != "" {
 		if db := DBs[dbID]; db != nil {
+			if !VerifyBasicAuth(w, r, db.User, db.Password) {
+				return
+			}
 			if key := vars["key"]; key != "" {
 				w.Write(db.Data[key])
 				return
 			}
 		}
 	}
+
 	w.WriteHeader(http.StatusNotFound)
 }
 
 func DBSetHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if db := DBs[vars["dbID"]]; db != nil {
+		if !VerifyBasicAuth(w, r, db.User, db.Password) {
+			return
+		}
 		if key := vars["key"]; key != "" {
-			var value []byte
-
-			if valueStr, ok := vars["value"]; ok {
-				value = []byte(valueStr)
-			} else {
-				value, _ = ioutil.ReadAll(r.Body)
-			}
-
-			fmt.Printf("value: %v\n", string(value))
+			value, _ := ioutil.ReadAll(r.Body)
 			db.Data[key] = value
+			Debug(3, "DB %s: Set %q to %q\n", db.ID, key, string(value))
 			return
 		}
 	}
 	w.WriteHeader(http.StatusNotFound)
 }
 
-/* Generic Stuff */
-/*****************/
-var lastID int = 0
-var DBs map[string]*DB = map[string]*DB{} // DBid -> DB
-
-func InfoHandler(w http.ResponseWriter, r *http.Request) {
-	str := fmt.Sprintf(
-		`OSB API Sample DB Broker
-------------------------
-DBs: %d
-`, len(DBs))
-	w.Write([]byte(str))
+func DBRemoveHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if db := DBs[vars["dbID"]]; db != nil {
+		if !VerifyBasicAuth(w, r, db.User, db.Password) {
+			return
+		}
+		if key := vars["key"]; key != "" {
+			if _, ok := db.Data[key]; ok {
+				delete(db.Data, key)
+				Debug(3, "DB %s: Removed %q\n", db.ID, key)
+				return
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
 }
 
 /* OSB APIs */
@@ -237,14 +343,11 @@ func WriteOSBError(w http.ResponseWriter, err, description string) {
 	WriteJSON(w, OSBError)
 }
 
-func WriteJSON(w http.ResponseWriter, obj interface{}) {
-	// Check for err
-	b, _ := json.MarshalIndent(obj, "", "  ")
-	w.Write(b)
-	w.Write([]byte("\n"))
-}
-
 func CatalogHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	WriteJSON(w, catalog)
 }
 
@@ -265,9 +368,13 @@ type ProvisonResponse struct {
 }
 
 func ProvisionHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	vars := mux.Vars(r)
 
-	instanceID := vars["instanceID"]
+	instanceID := vars["iID"]
 	if instanceID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing InstanceID", "")
@@ -324,6 +431,7 @@ func ProvisionHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	Debug(2, "Instance %s: created\n", instanceID)
 	broker.Instances[instanceID] = &Instance{
 		DB:       NewDB(r),
 		Request:  pReq,
@@ -335,13 +443,21 @@ func ProvisionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	w.Write([]byte("Hello\n"))
 }
 
 func DeprovisionHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	vars := mux.Vars(r)
 
-	instanceID := vars["instanceID"]
+	instanceID := vars["iID"]
 	if instanceID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing InstanceID", "")
@@ -381,19 +497,24 @@ func DeprovisionHandler(w http.ResponseWriter, r *http.Request) {
 	delete(broker.Instances, instanceID)
 
 	w.WriteHeader(http.StatusOK)
+	Debug(2, "Instance %s: deleted\n", instanceID)
 }
 
 func BindHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	vars := mux.Vars(r)
 
-	instanceID := vars["instanceID"]
+	instanceID := vars["iID"]
 	if instanceID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing InstanceID", "")
 		return
 	}
 
-	bindingID := vars["bindingID"]
+	bindingID := vars["bID"]
 	if bindingID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing BindingID", "")
@@ -430,19 +551,24 @@ func BindHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	WriteJSON(w, creds)
+	Debug(2, "Instance %s: Binding %q created\n", instanceID, bindingID)
 }
 
 func UnbindHandler(w http.ResponseWriter, r *http.Request) {
+	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		return
+	}
+
 	vars := mux.Vars(r)
 
-	instanceID := vars["instanceID"]
+	instanceID := vars["iID"]
 	if instanceID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing InstanceID", "")
 		return
 	}
 
-	bindingID := vars["bindingID"]
+	bindingID := vars["bID"]
 	if bindingID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		WriteOSBError(w, "Missing BindingID", "")
@@ -488,41 +614,62 @@ func UnbindHandler(w http.ResponseWriter, r *http.Request) {
 	delete(instance.Bindings, bindingID)
 
 	w.WriteHeader(http.StatusOK)
+	Debug(2, "Instance %s: Binding %q deleted\n", instanceID, bindingID)
 }
 
 func main() {
 	port := 80
 	ip := "0.0.0.0"
 
+	if v := os.Getenv("VERBOSE"); v != "" {
+		if vInt, err := strconv.Atoi(v); err == nil {
+			verbose = vInt
+		}
+	}
+
+	flag.IntVar(&verbose, "v", verbose, "Verbosity level")
+	flag.IntVar(&port, "p", port, "Listen port")
+	flag.StringVar(&ip, "i", ip, "IP/interface to listen on")
+	flag.StringVar(&hostString, "h", "", "Host/port string to use for DBs ")
+	flag.StringVar(&brokerUser, "u", brokerUser, "Username for broker/DB admin")
+	flag.StringVar(&brokerPassword, "w", brokerPassword, "Password for broker/DB admin")
+	flag.BoolVar(&disableAuth, "a", false, "Turn off all auth checking")
+
+	flag.Parse()
+
 	r := mux.NewRouter()
 	r.HandleFunc("/info", InfoHandler)
 	r.HandleFunc("/", InfoHandler)
 
 	r.HandleFunc("/v2/catalog", CatalogHandler).Methods("GET")
-	r.HandleFunc("/v2/service_instances/{instanceID}", ProvisionHandler).
+	r.HandleFunc("/v2/service_instances/{iID}", ProvisionHandler).
 		Methods("PUT")
-	r.HandleFunc("/v2/service_instances/{instanceID}", UpdateHandler).
+	r.HandleFunc("/v2/service_instances/{iID}", UpdateHandler).
 		Methods("PATCH")
-	r.HandleFunc("/v2/service_instances/{instanceID}/service_bindings/{bindingID}",
+	r.HandleFunc("/v2/service_instances/{iID}/service_bindings/{bID}",
 		BindHandler).Methods("PUT")
-	r.HandleFunc("/v2/service_instances/{instanceID}/service_bindings/{bindingID}",
+	r.HandleFunc("/v2/service_instances/{iID}/service_bindings/{bID}",
 		UnbindHandler).Methods("DELETE")
-	r.HandleFunc("/v2/service_instances/{instanceID}", DeprovisionHandler).
+	r.HandleFunc("/v2/service_instances/{iID}", DeprovisionHandler).
 		Methods("DELETE")
 
 	r.HandleFunc("/db", DBAllHandler).Methods("GET")
+	r.HandleFunc("/db/", DBAllHandler).Methods("GET")
 	r.HandleFunc("/db", DBCreateHandler).Methods("POST")
 	r.HandleFunc("/db/", DBCreateHandler).Methods("POST")
+
 	r.HandleFunc("/db/{dbID}", DBCreateHandler).Methods("PUT")
+	r.HandleFunc("/db/{dbID}/", DBCreateHandler).Methods("PUT")
 	r.HandleFunc("/db/{dbID}", DBHandler).Methods("GET")
 	r.HandleFunc("/db/{dbID}/", DBHandler).Methods("GET")
 	r.HandleFunc("/db/{dbID}", DBDeleteHandler).Methods("DELETE")
-	r.HandleFunc("/db/{dbID}/{key}", DBGetHandler).Methods("GET")
-	r.HandleFunc("/db/{dbID}/{key}", DBSetHandler).Methods("PUT")
-	r.HandleFunc("/db/{dbID}/{key}/", DBSetHandler).Methods("PUT")
-	r.HandleFunc("/db/{dbID}/{key}/{value:.*}", DBSetHandler).Methods("PUT")
+	r.HandleFunc("/db/{dbID}/", DBDeleteHandler).Methods("DELETE")
 
-	fmt.Printf("Server listening on %s:%d\n", ip, port)
+	r.HandleFunc("/db/{dbID}/{key:.*}", DBGetHandler).Methods("GET")
+	r.HandleFunc("/db/{dbID}/{key:.*}", DBSetHandler).Methods("PUT")
+	r.HandleFunc("/db/{dbID}/{key:.*}", DBRemoveHandler).Methods("DELETE")
+
+	Debug(1, "Server listening on %s:%d\n", ip, port)
 	server := &http.Server{
 		Handler:      r,
 		Addr:         fmt.Sprintf("%s:%d", ip, port),

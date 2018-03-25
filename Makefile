@@ -1,4 +1,4 @@
-all: image
+all: broker
 
 IMAGE_NAME?=duglin/osdb
 
