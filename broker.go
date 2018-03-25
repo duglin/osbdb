@@ -144,6 +144,33 @@ func NewDB(r *http.Request) *DB {
 	return db
 }
 
+func NewDBByID(r *http.Request, id string) *DB {
+	host := r.Host
+	if hostString != "" {
+		host = hostString
+	}
+
+	db := &DB{
+		ID:       id,
+		User:     "user",
+		Password: GeneratePassword(),
+		Data:     map[string][]byte{},
+		URL:      fmt.Sprintf("http://%s/db/"+id, host),
+		mutex:    sync.Mutex{},
+	}
+
+	DBMapmutex.Lock()
+	if _, ok := DBs[id]; ok {
+		DBMapmutex.Unlock()
+		return nil
+	}
+	DBs[db.ID] = db
+	DBMapmutex.Unlock()
+
+	Debug(2, "DB %s: created\n", db.ID)
+	return db
+}
+
 func DeleteDB(db *DB) {
 	DBMapmutex.Lock()
 	delete(DBs, db.ID)
@@ -197,7 +224,6 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 
 	if dbID == "" {
 		db := NewDB(r)
-		DBs[db.ID] = db
 		w.Header().Add("Location", "/db/"+db.ID)
 		w.WriteHeader(http.StatusCreated)
 		tmpDB := DBInfo{
@@ -209,13 +235,11 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if DBs[dbID] != nil {
+	db := NewDBByID(r, dbID)
+	if db == nil {
 		w.WriteHeader(http.StatusConflict)
 		return
 	}
-
-	db := NewDB(r)
-	DBs[dbID] = db
 
 	// Add host:port
 	w.Header().Add("Location", "/db/"+dbID)
@@ -278,7 +302,7 @@ func DBSetHandler(w http.ResponseWriter, r *http.Request) {
 		if key := vars["key"]; key != "" {
 			var value []byte = nil
 			valueStr := "nil"
-			if r.Body != http.NoBody {
+			if r.Header.Get("X-NULL") == "" {
 				value, _ = ioutil.ReadAll(r.Body)
 				valueStr = fmt.Sprintf("%q", value)
 			}
