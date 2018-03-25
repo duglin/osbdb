@@ -100,6 +100,12 @@ type DB struct {
 	mutex    sync.Mutex
 }
 
+type DBInfo struct {
+	URL      string
+	User     string
+	Password string
+}
+
 var newDBIDmutex = &sync.Mutex{}
 var DBMapmutex = &sync.Mutex{}
 
@@ -150,9 +156,14 @@ func DBAllHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpDBs := []*DB{}
+	tmpDBs := []*DBInfo{}
 	for _, db := range DBs {
-		tmpDBs = append(tmpDBs, db)
+		tmpDB := &DBInfo{
+			URL:      db.URL,
+			User:     db.User,
+			Password: db.Password,
+		}
+		tmpDBs = append(tmpDBs, tmpDB)
 	}
 	WriteJSON(w, tmpDBs)
 }
@@ -164,7 +175,12 @@ func DBHandler(w http.ResponseWriter, r *http.Request) {
 			if !VerifyBasicAuth(w, r, db.User, db.Password) {
 				return
 			}
-			WriteJSON(w, db)
+			tmpDB := DBInfo{
+				URL:      db.URL,
+				User:     db.User,
+				Password: db.Password,
+			}
+			WriteJSON(w, tmpDB)
 			return
 		}
 	}
@@ -184,7 +200,12 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 		DBs[db.ID] = db
 		w.Header().Add("Location", "/db/"+db.ID)
 		w.WriteHeader(http.StatusCreated)
-		WriteJSON(w, db)
+		tmpDB := DBInfo{
+			URL:      db.URL,
+			User:     db.User,
+			Password: db.Password,
+		}
+		WriteJSON(w, tmpDB)
 		return
 	}
 
@@ -200,7 +221,12 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Location", "/db/"+dbID)
 
 	w.WriteHeader(http.StatusCreated)
-	WriteJSON(w, db)
+	tmpDB := DBInfo{
+		URL:      db.URL,
+		User:     db.User,
+		Password: db.Password,
+	}
+	WriteJSON(w, tmpDB)
 }
 
 func DBDeleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -228,8 +254,14 @@ func DBGetHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if key := vars["key"]; key != "" {
-				w.Write(db.Data[key])
-				return
+				if v, ok := db.Data[key]; ok {
+					if v == nil {
+						w.WriteHeader(http.StatusNoContent)
+					} else {
+						w.Write(v)
+					}
+					return
+				}
 			}
 		}
 	}
@@ -244,9 +276,14 @@ func DBSetHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if key := vars["key"]; key != "" {
-			value, _ := ioutil.ReadAll(r.Body)
+			var value []byte = nil
+			valueStr := "nil"
+			if r.Body != http.NoBody {
+				value, _ = ioutil.ReadAll(r.Body)
+				valueStr = fmt.Sprintf("%q", value)
+			}
 			db.Data[key] = value
-			Debug(3, "DB %s: Set %q to %q\n", db.ID, key, string(value))
+			Debug(3, "DB %s: Set %q to %s\n", db.ID, key, valueStr)
 			return
 		}
 	}
