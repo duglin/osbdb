@@ -752,7 +752,7 @@ func main() {
 	flag.IntVar(&verbose, "v", verbose, "Verbosity level")
 	flag.IntVar(&port, "p", port, "Listen port")
 	flag.StringVar(&ip, "i", ip, "IP/interface to listen on")
-	flag.StringVar(&hostString, "h", "", "Host/port string to use for DBs ")
+	flag.StringVar(&hostString, "h", "", "Host:port string to use for DBs")
 	flag.StringVar(&brokerUser, "u", brokerUser, "Username for broker/DB admin")
 	flag.StringVar(&brokerPassword, "w", brokerPassword, "Password for broker/DB admin")
 	flag.BoolVar(&disableAuth, "a", false, "Turn off all auth checking")
