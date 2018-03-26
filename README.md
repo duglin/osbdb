@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/duglin/osbdb.svg?branch=master)](https://travis-ci.org/duglin/osbdb "Travis")
+
 # Open Service Broker API Database
 
 This repo contains a light-weight implementation of the Open Service
