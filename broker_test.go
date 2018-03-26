@@ -1,19 +1,43 @@
-package dbclient_test
+package main
 
 import (
+	// "context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
-	dbclient "."
+	"./dbclient"
 )
 
-var host = "localhost"
-var port = 80
-var url = "http://lostlcaho:80/db/"
-var user = ""
-var password = ""
+var testHost = "localhost:80"
+var testUser = ""
+var testPassword = ""
+
+func TestMain(m *testing.M) {
+	rc := 0
+
+	verbose = 0
+	testUser = brokerUser
+	testPassword = brokerPassword
+
+	go StartServer()
+	time.Sleep(1 * time.Second)
+
+	// Run first w/o any auth
+	fmt.Printf("Running w/o any auth\n")
+	disableAuth = true
+	rc += m.Run()
+
+	// Now run all tests again with auth
+	fmt.Printf("\nRunning with auth\n")
+	disableAuth = false
+	rc += m.Run()
+
+	os.Exit(rc)
+}
 
 func Assert(t *testing.T, b bool, errStr string, args ...interface{}) {
 	if !b {
@@ -50,23 +74,24 @@ func CleanDBs(t *testing.T, url string, user, password string) {
 }
 
 func TestCreates1(t *testing.T) {
-	testURL := fmt.Sprintf("http://%s:%d/db", host, port)
+	testURL := fmt.Sprintf("http://%s/db", testHost)
 
-	CleanDBs(t, testURL, user, password)
-	defer CleanDBs(t, testURL, user, password)
+	CleanDBs(t, testURL, testUser, testPassword)
+	defer CleanDBs(t, testURL, testUser, testPassword)
 
-	db, err := dbclient.NewDB(testURL, user, password)
+	db, err := dbclient.NewDB(testURL, testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 	Assert(t, db.URL != "", "Bad db.URL from create")
 	Assert(t, db.User != "", "Bad db.User from create")
 	Assert(t, db.Password != "", "Bad db.Password from create")
 
-	db1, err := dbclient.GetDB(testURL, db.GetID(), user, password)
+	db1, err := dbclient.GetDB(testURL, db.GetID(), db.User, db.Password)
+	Assert(t, err == nil, "Error getting DB: %s", err)
 	Assert(t, db1.URL == db.URL, "URLs should match(%q,%q)", db1.URL, db.URL)
 	Assert(t, db1.User == db.User, "Users should match(%q,%q)", db1.User, db.User)
 	Assert(t, db1.Password == db.Password, "Passwords should match(%q,%q)", db1.Password, db.Password)
 
-	db2, err := dbclient.NewDB(testURL, user, password)
+	db2, err := dbclient.NewDB(testURL, testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 	Assert(t, db.URL != db2.URL, "DB URLs should not match")
 	Assert(t, db.Password != db2.Password, "DB passwords should not match")
@@ -77,22 +102,22 @@ func TestCreates1(t *testing.T) {
 }
 
 func TestCreates2(t *testing.T) {
-	testURL := fmt.Sprintf("http://%s:%d/db", host, port)
+	testURL := fmt.Sprintf("http://%s/db", testHost)
 
-	CleanDBs(t, testURL, user, password)
-	defer CleanDBs(t, testURL, user, password)
+	CleanDBs(t, testURL, testUser, testPassword)
+	defer CleanDBs(t, testURL, testUser, testPassword)
 
-	db, err := dbclient.NewDBByID(testURL, "100", user, password)
+	db, err := dbclient.NewDBByID(testURL, "100", testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 	Assert(t, db.URL != "", "Bad db.URL from create")
 	Assert(t, db.User != "", "Bad db.User from create")
 	Assert(t, db.Password != "", "Bad db.Password from create")
 
-	db2, err := dbclient.NewDBByID(testURL, "100", user, password)
+	db2, err := dbclient.NewDBByID(testURL, "100", testUser, testPassword)
 	Assert(t, err != nil, "Creating DB should have failed")
 	Assert(t, db2 == nil, "Failed DB should be nil")
 
-	db2, err = dbclient.NewDBByID(testURL, "101", user, password)
+	db2, err = dbclient.NewDBByID(testURL, "101", testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 	Assert(t, db.URL != "", "Bad db.URL from create")
 	Assert(t, db.User != "", "Bad db.User from create")
@@ -100,18 +125,18 @@ func TestCreates2(t *testing.T) {
 }
 
 func TestGetDB(t *testing.T) {
-	testURL := fmt.Sprintf("http://%s:%d/db", host, port)
+	testURL := fmt.Sprintf("http://%s/db", testHost)
 
-	CleanDBs(t, testURL, user, password)
-	defer CleanDBs(t, testURL, user, password)
+	CleanDBs(t, testURL, testUser, testPassword)
+	defer CleanDBs(t, testURL, testUser, testPassword)
 
-	db, err := dbclient.NewDB(testURL, user, password)
+	db, err := dbclient.NewDB(testURL, testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 	Assert(t, db.URL != "", "Bad db.URL from create")
 	Assert(t, db.User != "", "Bad db.User from create")
 	Assert(t, db.Password != "", "Bad db.Password from create")
 
-	db2, err := dbclient.GetDB(testURL, db.GetID(), user, password)
+	db2, err := dbclient.GetDB(testURL, db.GetID(), brokerUser, brokerPassword)
 	Assert(t, err == nil, "Error getting DB: %s", err)
 	Assert(t, db.URL == db2.URL, "URLs should match %q,%q", db.URL, db2.URL)
 	Assert(t, db.User == db2.User, "Users should match %q,%q", db.User, db2.User)
@@ -119,12 +144,12 @@ func TestGetDB(t *testing.T) {
 }
 
 func TestGetSetString(t *testing.T) {
-	testURL := fmt.Sprintf("http://%s:%d/db", host, port)
+	testURL := fmt.Sprintf("http://%s/db", testHost)
 
-	CleanDBs(t, testURL, user, password)
-	defer CleanDBs(t, testURL, user, password)
+	CleanDBs(t, testURL, testUser, testPassword)
+	defer CleanDBs(t, testURL, testUser, testPassword)
 
-	db, err := dbclient.NewDB(testURL, user, password)
+	db, err := dbclient.NewDB(testURL, testUser, testPassword)
 	Assert(t, err == nil, "Error creating DB: %s", err)
 
 	val, err := db.Get("prop1")
@@ -162,4 +187,38 @@ func TestGetSetString(t *testing.T) {
 	val, err = db.Get("prop2")
 	Assert(t, err != nil, "Should fail to get prop")
 	Assert(t, val == "", "Val should not be set: %v", val)
+}
+
+func TestAuth(t *testing.T) {
+	if disableAuth == true {
+		t.SkipNow()
+	}
+
+	testURL := fmt.Sprintf("http://%s/db", testHost)
+
+	CleanDBs(t, testURL, testUser, testPassword)
+	defer CleanDBs(t, testURL, testUser, testPassword)
+
+	_, err := dbclient.NewDB(testURL, "badUser", testPassword)
+	Assert(t, err != nil, "Create should have failed")
+
+	_, err = dbclient.NewDB(testURL, testUser, "badPassword")
+	Assert(t, err != nil, "Create should have failed")
+
+	db, err := dbclient.NewDB(testURL, testUser, testPassword)
+	Assert(t, err == nil, "Create should have worked")
+
+	saveUser := db.User
+	savePassword := db.Password
+
+	db.User = "badUser"
+	err = db.DeleteDB()
+	Assert(t, err != nil, "Delete should have failed")
+
+	db.User = saveUser
+	db.Password = "badPassword"
+	err = db.DeleteDB()
+	Assert(t, err != nil, "Delete should have failed")
+
+	db.Password = savePassword
 }

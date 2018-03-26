@@ -19,6 +19,8 @@ import (
 /* Misc Stuff */
 /**************/
 var verbose int = 3
+var port int = 80
+var ip string = "0.0.0.0"
 var hostString string = ""
 var brokerUser string = "user"
 var brokerPassword string = "passw0rd"
@@ -82,7 +84,6 @@ func VerifyBasicAuth(w http.ResponseWriter, r *http.Request,
 	if ok && user == u && password == p {
 		return true
 	}
-	w.WriteHeader(http.StatusUnauthorized)
 	return false
 }
 
@@ -129,7 +130,7 @@ func NewDB(r *http.Request) *DB {
 
 	db := &DB{
 		ID:       strID,
-		User:     "user",
+		User:     "user1",
 		Password: GeneratePassword(),
 		Data:     map[string][]byte{},
 		URL:      fmt.Sprintf("http://%s/db/"+strID, host),
@@ -152,7 +153,7 @@ func NewDBByID(r *http.Request, id string) *DB {
 
 	db := &DB{
 		ID:       id,
-		User:     "user",
+		User:     "user1",
 		Password: GeneratePassword(),
 		Data:     map[string][]byte{},
 		URL:      fmt.Sprintf("http://%s/db/"+id, host),
@@ -180,6 +181,7 @@ func DeleteDB(db *DB) {
 
 func DBAllHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -199,7 +201,10 @@ func DBHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if dbID := vars["dbID"]; dbID != "" {
 		if db := DBs[dbID]; db != nil {
-			if !VerifyBasicAuth(w, r, db.User, db.Password) {
+			if !VerifyBasicAuth(w, r, db.User, db.Password) &&
+				!VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			tmpDB := DBInfo{
@@ -219,6 +224,7 @@ func DBCreateHandler(w http.ResponseWriter, r *http.Request) {
 	dbID := vars["dbID"]
 
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -260,6 +266,7 @@ func DBDeleteHandler(w http.ResponseWriter, r *http.Request) {
 			if !VerifyBasicAuth(w, r, db.User, db.Password) &&
 				!VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
 
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			DeleteDB(db)
@@ -274,7 +281,9 @@ func DBGetHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if dbID := vars["dbID"]; dbID != "" {
 		if db := DBs[dbID]; db != nil {
+			os.Stdout.Sync()
 			if !VerifyBasicAuth(w, r, db.User, db.Password) {
+				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
 			if key := vars["key"]; key != "" {
@@ -297,6 +306,7 @@ func DBSetHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if db := DBs[vars["dbID"]]; db != nil {
 		if !VerifyBasicAuth(w, r, db.User, db.Password) {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		if key := vars["key"]; key != "" {
@@ -318,6 +328,7 @@ func DBRemoveHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	if db := DBs[vars["dbID"]]; db != nil {
 		if !VerifyBasicAuth(w, r, db.User, db.Password) {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		if key := vars["key"]; key != "" {
@@ -406,6 +417,7 @@ func WriteOSBError(w http.ResponseWriter, err, description string) {
 
 func CatalogHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -430,6 +442,7 @@ type ProvisonResponse struct {
 
 func ProvisionHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -505,6 +518,7 @@ func ProvisionHandler(w http.ResponseWriter, r *http.Request) {
 
 func UpdateHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -513,6 +527,7 @@ func UpdateHandler(w http.ResponseWriter, r *http.Request) {
 
 func DeprovisionHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -563,6 +578,7 @@ func DeprovisionHandler(w http.ResponseWriter, r *http.Request) {
 
 func BindHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -617,6 +633,7 @@ func BindHandler(w http.ResponseWriter, r *http.Request) {
 
 func UnbindHandler(w http.ResponseWriter, r *http.Request) {
 	if !VerifyBasicAuth(w, r, brokerUser, brokerPassword) {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -678,26 +695,7 @@ func UnbindHandler(w http.ResponseWriter, r *http.Request) {
 	Debug(2, "Instance %s: Binding %q deleted\n", instanceID, bindingID)
 }
 
-func main() {
-	port := 80
-	ip := "0.0.0.0"
-
-	if v := os.Getenv("VERBOSE"); v != "" {
-		if vInt, err := strconv.Atoi(v); err == nil {
-			verbose = vInt
-		}
-	}
-
-	flag.IntVar(&verbose, "v", verbose, "Verbosity level")
-	flag.IntVar(&port, "p", port, "Listen port")
-	flag.StringVar(&ip, "i", ip, "IP/interface to listen on")
-	flag.StringVar(&hostString, "h", "", "Host/port string to use for DBs ")
-	flag.StringVar(&brokerUser, "u", brokerUser, "Username for broker/DB admin")
-	flag.StringVar(&brokerPassword, "w", brokerPassword, "Password for broker/DB admin")
-	flag.BoolVar(&disableAuth, "a", false, "Turn off all auth checking")
-
-	flag.Parse()
-
+func StartServer() {
 	r := mux.NewRouter()
 	r.HandleFunc("/info", InfoHandler)
 	r.HandleFunc("/", InfoHandler)
@@ -742,4 +740,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s\n", err)
 		os.Exit(1)
 	}
+}
+
+func main() {
+	if v := os.Getenv("VERBOSE"); v != "" {
+		if vInt, err := strconv.Atoi(v); err == nil {
+			verbose = vInt
+		}
+	}
+
+	flag.IntVar(&verbose, "v", verbose, "Verbosity level")
+	flag.IntVar(&port, "p", port, "Listen port")
+	flag.StringVar(&ip, "i", ip, "IP/interface to listen on")
+	flag.StringVar(&hostString, "h", "", "Host/port string to use for DBs ")
+	flag.StringVar(&brokerUser, "u", brokerUser, "Username for broker/DB admin")
+	flag.StringVar(&brokerPassword, "w", brokerPassword, "Password for broker/DB admin")
+	flag.BoolVar(&disableAuth, "a", false, "Turn off all auth checking")
+
+	flag.Parse()
+
+	StartServer()
 }
