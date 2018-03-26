@@ -20,8 +20,10 @@ func TestMain(m *testing.M) {
 	rc := 0
 
 	verbose = 0
+	port = 3000
 	testUser = brokerUser
 	testPassword = brokerPassword
+	testHost = fmt.Sprintf("localhost:%d", port)
 
 	go StartServer()
 	time.Sleep(1 * time.Second)
