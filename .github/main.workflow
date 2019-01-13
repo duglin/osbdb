@@ -6,5 +6,5 @@ workflow "New workflow" {
 action "Build" {
   uses = "docker://golang"
   runs = ["/bin/sh"]
-  args = ["-c","go get ... && /usr/bin/make"]
+  args = ["-c","go get -d . && /usr/bin/make"]
 }
