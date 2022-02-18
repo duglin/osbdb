@@ -389,7 +389,7 @@ type Plan struct {
 var catalog = Catalog{
 	Services: []Service{
 		Service{
-			Name:        "db",
+			Name:        "demodb",
 			ID:          "service-1-id",
 			Description: "In-memory DB for demos",
 			Bindable:    true,
@@ -398,6 +398,12 @@ var catalog = Catalog{
 					ID:          "plan-1-id",
 					Name:        "free",
 					Description: "Totally free usage",
+				},
+				Plan{
+					ID:          "plan-2-id",
+					Name:        "paid",
+					Description: "You can't afford me ",
+					Free:        false,
 				},
 			},
 		},
@@ -609,22 +615,36 @@ func BindHandler(w http.ResponseWriter, r *http.Request) {
 	if binding != nil {
 		// Not sure if we should fail yet
 
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{}"))
+		// w.WriteHeader(http.StatusOK)
+		// w.Write([]byte("{}"))
+
+		// Should check to see if the incoming params are the same first
+		fmt.Printf("Dup\n")
+		w.WriteHeader(http.StatusConflict)
+		WriteOSBError(w, "Binding with id %q already exists", bindingID)
 		return
 	}
 
 	instance.Bindings[bindingID] = struct{}{}
 
 	creds := struct {
-		User     string `json:"user,omitempty"`
-		Password string `json:"password,omitempty"`
-		URL      string `json:"url,omitempty"`
+		Credentials struct {
+			User     string `json:"user,omitempty"`
+			Password string `json:"password,omitempty"`
+			URL      string `json:"url,omitempty"`
+		} `json:"credentials"`
 	}{
-		User:     instance.DB.User,
-		Password: instance.DB.Password,
-		URL:      instance.DB.URL,
+		Credentials: struct {
+			User     string `json:"user,omitempty"`
+			Password string `json:"password,omitempty"`
+			URL      string `json:"url,omitempty"`
+		}{
+			User:     instance.DB.User,
+			Password: instance.DB.Password,
+			URL:      instance.DB.URL,
+		},
 	}
+	fmt.Printf("creds: %#q\n", creds)
 
 	w.WriteHeader(http.StatusCreated)
 	WriteJSON(w, creds)
